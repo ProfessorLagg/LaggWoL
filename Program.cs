@@ -15,13 +15,8 @@ namespace LaggWoL {
 						}
 				}
 				static void Main(string[] args) {
-						try {
-								CLIArgs parsedArgs = new CLIArgs(args);
-								SendWoL(parsedArgs.MAC);
-						}
-						catch (Exception ex) {
-								PrintHelp(ex.Message);
-						}
+						CLIArgs parsedArgs = new CLIArgs(args);
+						SendWoL(parsedArgs.MAC);
 				}
 
 				static void PrintHelp(string errorMsg = "") {
@@ -53,11 +48,54 @@ namespace LaggWoL {
 
 						return magicPacket;
 				}
+				static bool CanSendBroadcastPacket(NetworkInterface nif) {
+						if (nif.IsReceiveOnly) { return false; }
+						if (nif.NetworkInterfaceType == NetworkInterfaceType.Loopback) { return false; }
+						if (!nif.Supports(NetworkInterfaceComponent.IPv4)) { return false; }
+
+
+						return nif.OperationalStatus == OperationalStatus.Up;
+				}
+				static IEnumerable<IPAddress> GetBroadcastIPs() {
+						if (!NetworkInterface.GetIsNetworkAvailable()) { yield break; }
+						NetworkInterface[] nifs = NetworkInterface.GetAllNetworkInterfaces();
+
+						NetworkInterface nif;
+						IPInterfaceProperties ipInterfaceProperties;
+						UnicastIPAddressInformationCollection unitcastAddresses;
+						IPAddress addr;
+						IPAddress mask;
+						IPv4Address iphelper;
+						IPAddress result;
+						for (int i = 0; i < nifs.Length; i++) {
+								nif = nifs[i];
+								if (!CanSendBroadcastPacket(nif)) { continue; }
+								ipInterfaceProperties = nif.GetIPProperties();
+								unitcastAddresses = ipInterfaceProperties.UnicastAddresses;
+								foreach (UnicastIPAddressInformation ipinfo in unitcastAddresses) {
+										addr = ipinfo.Address;
+										if (addr.AddressFamily != AddressFamily.InterNetwork) { continue; } // Also checks that the ip is IPv4
+										mask = ipinfo.IPv4Mask;
+										iphelper = new(addr, mask);
+										result = new IPAddress(iphelper.BroadcastAddress);
+										yield return result;
+								}
+						}
+				}
 				static void SendWoL(PhysicalAddress mac) {
 						ReadOnlySpan<byte> magicPacket = BuildMagicPacket(mac);
-						UdpClient udpClient = new UdpClient();
-						udpClient.Connect(IPAddress.Broadcast, 9);
-						udpClient.Send(magicPacket);
-        }
+#if DEBUG
+						Console.WriteLine($"Magic Packet = 0x{Convert.ToHexString(magicPacket)}");
+#endif
+						using (UdpClient udpClient = new()) {
+								foreach (IPAddress ip in GetBroadcastIPs()) {
+										udpClient.Connect(ip, 9);
+										udpClient.Send(magicPacket);
+#if DEBUG
+										Console.WriteLine($"Sent WoL packet to: {ip.ToString()}:9");
+#endif
+								}
+						}
+				}
 		}
 }
